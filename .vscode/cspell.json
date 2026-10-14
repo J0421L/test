@@ -1,0 +1,11 @@
+{
+    "ignorePaths": [
+        ".github/workflows/*.yml",
+        "*.cls"
+    ],
+    "words": [
+        "Aragorn",
+        "aragorn1025",
+        "Innotech",
+    ]
+}

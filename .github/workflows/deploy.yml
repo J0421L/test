@@ -1,0 +1,129 @@
+name: deploy
+
+on:
+  push:
+    branches: ['main']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  IMAGE_NAME: ghcr.io/aragorn1025/resume
+  AUTHOR_NAME: ${{ vars.AUTHOR_NAME || github.repository_owner }}
+
+jobs:
+  check-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    outputs:
+      image: ${{ steps.check.outputs.image }}
+      is_build_image: ${{ steps.check.outputs.is_build_image }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check if image exists on GHCR
+        id: check
+        env:
+          IMAGE_TAG: ${{ hashFiles('Dockerfile') }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          image="${IMAGE_NAME}:${IMAGE_TAG}"
+          echo "image=${image}" >> $GITHUB_OUTPUT
+          if docker manifest inspect "${image}" > /dev/null 2>&1; then
+            echo "is_build_image=false" >> $GITHUB_OUTPUT
+          elif [[ "ghcr.io/${REPOSITORY,,}" == "${IMAGE_NAME}" ]]; then
+            echo "is_build_image=true" >> $GITHUB_OUTPUT
+          else
+            echo "::error::Image ${image} does not exist. Forks do not build images; modify IMAGE_NAME in this workflow to build your own Dockerfile."
+            exit 1
+          fi
+
+  build-image:
+    needs: check-image
+    if: needs.check-image.outputs.is_build_image == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ needs.check-image.outputs.image }}
+            ${{ env.IMAGE_NAME }}:latest
+          no-cache: true
+
+  build-website:
+    needs: [check-image, build-image]
+    if: ${{ !cancelled() && needs.check-image.result == 'success' && (needs.build-image.result == 'success' || needs.build-image.result == 'skipped') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    container:
+      image: ${{ needs.check-image.outputs.image }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Compile Resume PDF
+        run: |
+          xelatex -interaction=nonstopmode -halt-on-error resume.tex
+      - name: Prepare static files
+        run: |
+          mkdir -p dist
+          cp resume.pdf "dist/${{ env.AUTHOR_NAME }}_Resume.pdf"
+          cat > dist/index.html << EOF
+          <!doctype html>
+          <meta charset="utf-8">
+          <meta http-equiv="refresh" content="0; url=${{ env.AUTHOR_NAME }}_Resume.pdf">
+          <link rel="canonical" href="${{ env.AUTHOR_NAME }}_Resume.pdf">
+          <title>Resume</title>
+          <a href="${{ env.AUTHOR_NAME }}_Resume.pdf">Resume (PDF)</a>
+          EOF
+      - name: Upload static files as artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: dist
+
+  deploy-website:
+    needs: build-website
+    if: ${{ !cancelled() && needs.build-website.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
