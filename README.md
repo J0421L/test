@@ -44,3 +44,8 @@ The layout is defined in `resume.cls`, so `resume.tex` only holds the content.
 Other options, such as the font size `10pt`, are passed to the `article` class.
 
 See `resume.tex` for a complete example.
+
+## License
+
+The template, including `resume.cls`, the `Dockerfile`, and the workflow, is licensed under the [MIT License](LICENSE).
+The personal information and resume content in `resume.tex` are not covered by this license, so please replace them with your own.
